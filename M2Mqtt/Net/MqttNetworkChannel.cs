@@ -26,6 +26,7 @@ using System.Net.Sockets;
 using System.Net;
 using System.Security.Cryptography.X509Certificates;
 using System;
+using System.Text;
 
 namespace uPLibrary.Networking.M2Mqtt
 {
@@ -41,6 +42,10 @@ namespace uPLibrary.Networking.M2Mqtt
         // remote host information
         private string remoteHostName;
         private int remotePort;
+
+        // proxy information
+        private string proxyHostName;
+        private int proxyPort;
 
         // socket for communication
         private Socket socket;
@@ -187,9 +192,9 @@ namespace uPLibrary.Networking.M2Mqtt
         /// <param name="remotePort">Remote port</param>
         public MqttNetworkChannel(string remoteHostName, int remotePort)
 #if !(MF_FRAMEWORK_VERSION_V4_2 || MF_FRAMEWORK_VERSION_V4_3 || COMPACT_FRAMEWORK)
-            : this(remoteHostName, remotePort, false, null, null, MqttSslProtocols.None, null, null)
+            : this(remoteHostName, remotePort, null, 0, false, null, null, MqttSslProtocols.None, null, null)
 #else
-            : this(remoteHostName, remotePort, false, null, null, MqttSslProtocols.None)
+            : this(remoteHostName, remotePort, null, 0, false, null, null, MqttSslProtocols.None)
 #endif
         {
         }
@@ -199,6 +204,8 @@ namespace uPLibrary.Networking.M2Mqtt
         /// </summary>
         /// <param name="remoteHostName">Remote Host name</param>
         /// <param name="remotePort">Remote port</param>
+        /// <param name="proxyHostName">Remote Host name</param>
+        /// <param name="proxyPort">Remote port</param>
         /// <param name="secure">Using SSL</param>
         /// <param name="caCert">CA certificate</param>
         /// <param name="clientCert">Client certificate</param>
@@ -206,15 +213,17 @@ namespace uPLibrary.Networking.M2Mqtt
 #if !(MF_FRAMEWORK_VERSION_V4_2 || MF_FRAMEWORK_VERSION_V4_3 || COMPACT_FRAMEWORK)
         /// <param name="userCertificateSelectionCallback">A RemoteCertificateValidationCallback delegate responsible for validating the certificate supplied by the remote party</param>
         /// <param name="userCertificateValidationCallback">A LocalCertificateSelectionCallback delegate responsible for selecting the certificate used for authentication</param>
-        public MqttNetworkChannel(string remoteHostName, int remotePort, bool secure, X509Certificate caCert, X509Certificate clientCert, MqttSslProtocols sslProtocol,
+        public MqttNetworkChannel(string remoteHostName, int remotePort, string proxyHostName, int proxyPort, bool secure, X509Certificate caCert, X509Certificate clientCert, MqttSslProtocols sslProtocol,
             RemoteCertificateValidationCallback userCertificateValidationCallback,
             LocalCertificateSelectionCallback userCertificateSelectionCallback)
 #else
-        public MqttNetworkChannel(string remoteHostName, int remotePort, bool secure, X509Certificate caCert, X509Certificate clientCert, MqttSslProtocols sslProtocol)
+        public MqttNetworkChannel(string remoteHostName, int remotePort, string proxyHostName, int proxyPort, bool secure, X509Certificate caCert, X509Certificate clientCert, MqttSslProtocols sslProtocol)
 #endif
         {
             this.remoteHostName = remoteHostName;
             this.remotePort = remotePort;
+            this.proxyHostName = proxyHostName;
+            this.proxyPort = proxyPort;
             this.secure = secure;
             this.caCert = caCert;
             this.clientCert = clientCert;
@@ -230,9 +239,34 @@ namespace uPLibrary.Networking.M2Mqtt
         /// </summary>
         public void Connect()
         {
-            this.socket = new Socket(this.RemoteIpAddress.GetAddressFamily(), SocketType.Stream, ProtocolType.Tcp);
+            // try connection to the proxy
+            if (this.proxyHostName != null)
+            {
+	            this.socket = new Socket(AddressFamily.InterNetwork, SocketType.Stream, ProtocolType.Tcp);
+	            this.socket.Connect(this.proxyHostName, this.proxyPort);
+
+	            string connectMessage = string.Format("CONNECT {0}:{1} HTTP/1.1{2}{2}", this.remoteHostName,
+	                                                  this.remotePort, Environment.NewLine);
+	            byte[] connectBytes = Encoding.UTF8.GetBytes(connectMessage);
+	            socket.Send(connectBytes);
+
+	            byte[] receiveBuffer = new byte[1024];
+	            int received = socket.Receive(receiveBuffer);
+	            string response = Encoding.ASCII.GetString(receiveBuffer, 0, received);
+
+	            if (!response.Contains("200"))
+	            {
+		            throw new
+			            Exception(string.Format("Error connecting to proxy server {0}:{1}. Response: {2}",
+			                                    this.remoteHostName, this.remotePort, response));
+	            }
+            }
             // try connection to the broker
-            this.socket.Connect(new IPEndPoint(this.RemoteIpAddress, this.remotePort));
+            else
+            {
+	            this.socket = new Socket(this.RemoteIpAddress.GetAddressFamily(), SocketType.Stream, ProtocolType.Tcp);
+	            this.socket.Connect(new IPEndPoint(this.RemoteIpAddress, this.remotePort));
+            }
 
 #if SSL
             // secure channel requested
