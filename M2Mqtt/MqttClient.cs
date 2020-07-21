@@ -668,7 +668,7 @@ namespace uPLibrary.Networking.M2Mqtt
 #if BROKER
         public void Close()
 #else
-        private void Close()
+        public void Close()
 #endif
         {
             // stop receiving thread
@@ -1619,6 +1619,7 @@ namespace uPLibrary.Networking.M2Mqtt
                     {
                         // wake up thread that will notify connection is closing
                         this.OnConnectionClosing();
+                        break;
                     }
                 }
                 catch (Exception e)
