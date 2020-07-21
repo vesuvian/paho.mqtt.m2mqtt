@@ -23,16 +23,17 @@ namespace uPLibrary.Networking.M2Mqtt.Exceptions
     /// </summary>
     public class MqttClientException : Exception
     {
-        /// <summary>
-        /// Constructor
-        /// </summary>
-        /// <param name="code">Error code</param>
-        public MqttClientException(MqttClientErrorCode errorCode)
-        {
-            this.errorCode = errorCode;
-        }
+	    /// <summary>
+	    /// Constructor
+	    /// </summary>
+	    /// <param name="code">Error code</param>
+	    public MqttClientException(MqttClientErrorCode errorCode)
+		    : base(errorCode.ToString())
+	    {
+		    this.errorCode = errorCode;
+	    }
 
-        // error code
+	    // error code
         private MqttClientErrorCode errorCode;
 
         /// <summary>
