@@ -557,78 +557,97 @@ namespace uPLibrary.Networking.M2Mqtt
         /// <param name="keepAlivePeriod">Keep alive period</param>
         /// <returns>Return code of CONNACK message from broker</returns>
         public byte Connect(string clientId,
-            string username,
-            string password,
-            bool willRetain,
-            byte willQosLevel,
-            bool willFlag,
-            string willTopic,
-            string willMessage,
-            bool cleanSession,
-            ushort keepAlivePeriod)
+                            string username,
+                            string password,
+                            bool willRetain,
+                            byte willQosLevel,
+                            bool willFlag,
+                            string willTopic,
+                            string willMessage,
+                            bool cleanSession,
+                            ushort keepAlivePeriod)
         {
-            // create CONNECT message
-            MqttMsgConnect connect = new MqttMsgConnect(clientId,
-                username,
-                password,
-                willRetain,
-                willQosLevel,
-                willFlag,
-                willTopic,
-                willMessage,
-                cleanSession,
-                keepAlivePeriod,
-                (byte)this.ProtocolVersion);
+	        // create CONNECT message
+	        MqttMsgConnect connect = new MqttMsgConnect(clientId,
+	                                                    username,
+	                                                    password,
+	                                                    willRetain,
+	                                                    willQosLevel,
+	                                                    willFlag,
+	                                                    willTopic,
+	                                                    willMessage,
+	                                                    cleanSession,
+	                                                    keepAlivePeriod,
+	                                                    (byte)this.ProtocolVersion);
 
-            try
-            {
-                // connect to the broker
-                this.channel.Connect();
-            }
-            catch (Exception ex)
-            {
-                throw new MqttConnectionException("Exception connecting to the broker", ex);
-            }
+	        try
+	        {
+		        // connect to the broker
+		        this.channel.Connect();
+	        }
+	        catch (Exception ex)
+	        {
+		        throw new MqttConnectionException("Exception connecting to the broker", ex);
+	        }
 
-            this.lastCommTime = 0;
-            this.isRunning = true;
-            this.isConnectionClosing = false;
-            // start thread for receiving messages from broker
-            Fx.StartThread(this.ReceiveThread);
-            
-            MqttMsgConnack connack = (MqttMsgConnack)this.SendReceive(connect);
-            // if connection accepted, start keep alive timer and 
-            if (connack.ReturnCode == MqttMsgConnack.CONN_ACCEPTED)
-            {
-                // set all client properties
-                this.ClientId = clientId;
-                this.CleanSession = cleanSession;
-                this.WillFlag = willFlag;
-                this.WillTopic = willTopic;
-                this.WillMessage = willMessage;
-                this.WillQosLevel = willQosLevel;
+	        this.lastCommTime = 0;
+	        this.isRunning = true;
+	        this.isConnectionClosing = false;
+	        // start thread for receiving messages from broker
+	        Fx.StartThread(this.ReceiveThread);
 
-                this.keepAlivePeriod = keepAlivePeriod * 1000; // convert in ms
+	        MqttMsgConnack connack = null;
+	        try
+	        {
+		        connack = SendReceive(connect) as MqttMsgConnack;
+	        }
+	        catch (Exception ex)
+	        {
+		        Trace.WriteLine(TraceLevel.Error, "An exception occurred when trying to connect: " + ex);
+	        }
 
-                // restore previous session
-                this.RestoreSession();
+	        // if connection accepted, start keep alive timer and 
+	        if (connack != null && connack.ReturnCode == MqttMsgConnack.CONN_ACCEPTED)
+	        {
+		        // set all client properties
+		        this.ClientId = clientId;
+		        this.CleanSession = cleanSession;
+		        this.WillFlag = willFlag;
+		        this.WillTopic = willTopic;
+		        this.WillMessage = willMessage;
+		        this.WillQosLevel = willQosLevel;
 
-                // keep alive period equals zero means turning off keep alive mechanism
-                if (this.keepAlivePeriod != 0)
-                {
-                    // start thread for sending keep alive message to the broker
-                    Fx.StartThread(this.KeepAliveThread);
-                }
+		        this.keepAlivePeriod = keepAlivePeriod * 1000; // convert in ms
 
-                // start thread for raising received message event from broker
-                Fx.StartThread(this.DispatchEventThread);
-                
-                // start thread for handling inflight messages queue to broker asynchronously (publish and acknowledge)
-                Fx.StartThread(this.ProcessInflightThread);
+		        // restore previous session
+		        this.RestoreSession();
 
-                this.IsConnected = true;
-            }
-            return connack.ReturnCode;
+		        // keep alive period equals zero means turning off keep alive mechanism
+		        if (this.keepAlivePeriod != 0)
+		        {
+			        // start thread for sending keep alive message to the broker
+			        Fx.StartThread(this.KeepAliveThread);
+		        }
+
+		        // start thread for raising received message event from broker
+		        Fx.StartThread(this.DispatchEventThread);
+
+		        // start thread for handling inflight messages queue to broker asynchronously (publish and acknowledge)
+		        Fx.StartThread(this.ProcessInflightThread);
+
+		        this.IsConnected = true;
+	        }
+	        else
+	        {
+		        Trace.WriteLine(TraceLevel.Error, "Connect failed, closing connection");
+
+		        // In a reconnect scenario, where the connection is accepted but the broker isn't responding,
+		        // the keepAliveEnd reset event will have been created, but the thread will have shut down, 
+		        // so don't wait for it to exit.
+		        Close(false);
+	        }
+
+	        return connack != null ? connack.ReturnCode : MqttMsgConnack.CONN_REFUSED_SERVER_UNAVAILABLE;
         }
 
         /// <summary>
@@ -662,49 +681,53 @@ namespace uPLibrary.Networking.M2Mqtt
         }
 #endif
 
-        /// <summary>
-        /// Close client
-        /// </summary>
-#if BROKER
-        public void Close()
-#else
-        public void Close()
-#endif
-        {
-            // stop receiving thread
-            this.isRunning = false;
+	    /// <summary>
+	    /// Close client
+	    /// </summary>
+	    public void Close()
+	    {
+		    Close(true);
+	    }
 
-            // wait end receive event thread
-            if (this.receiveEventWaitHandle != null)
-                this.receiveEventWaitHandle.Set();
+	    /// <summary>
+	    /// Close client
+	    /// </summary>
+	    public void Close(bool waitForKeepAlive)
+	    {
+		    // stop receiving thread
+		    this.isRunning = false;
 
-            // wait end process inflight thread
-            if (this.inflightWaitHandle != null)
-                this.inflightWaitHandle.Set();
+		    // wait end receive event thread
+		    if (this.receiveEventWaitHandle != null)
+			    this.receiveEventWaitHandle.Set();
+
+		    // wait end process inflight thread
+		    if (this.inflightWaitHandle != null)
+			    this.inflightWaitHandle.Set();
 
 #if BROKER
             // unlock keep alive thread
             this.keepAliveEvent.Set();
 #else
-            // unlock keep alive thread and wait
-            this.keepAliveEvent.Set();
+		    // unlock keep alive thread and wait
+		    this.keepAliveEvent.Set();
 
-            if (this.keepAliveEventEnd != null)
-                this.keepAliveEventEnd.WaitOne();
+		    if (this.keepAliveEventEnd != null && waitForKeepAlive)
+			    this.keepAliveEventEnd.WaitOne();
 #endif
 
-            // clear all queues
-            this.inflightQueue.Clear();
-            this.internalQueue.Clear();
-            this.eventQueue.Clear();
+		    // clear all queues
+		    this.inflightQueue.Clear();
+		    this.internalQueue.Clear();
+		    this.eventQueue.Clear();
 
-            // close network channel
-            this.channel.Close();
+		    // close network channel
+		    this.channel.Close();
 
-            this.IsConnected = false;
-        }
+		    this.IsConnected = false;
+	    }
 
-        /// <summary>
+	    /// <summary>
         /// Execute ping to broker for keep alive
         /// </summary>
         /// <returns>PINGRESP message from broker</returns>
@@ -895,11 +918,9 @@ namespace uPLibrary.Networking.M2Mqtt
         /// </summary>
         private void OnConnectionClosing()
         {
-            if (!this.isConnectionClosing)
-            {
-                this.isConnectionClosing = true;
-                this.receiveEventWaitHandle.Set();
-            }
+	        this.isConnectionClosing = true;
+	        this.receiveEventWaitHandle.Set();
+	        this.syncEndReceiving.Set();
         }
 
         /// <summary>
